@@ -2,6 +2,7 @@ library(data.table)
 library(magrittr)
 library(rvest)
 library(RCurl)
+library(parallel)
 
 start.time <- proc.time()
 
@@ -13,7 +14,8 @@ url.list <- character()
 switch <- 1
 while (switch == 1) {
   tryCatch(
-    {   cat("Processing page", pageNum)
+    {   cat("Processing page")
+        cat(" ", pageNum)
         pageurl <- paste(homePageNum, pageNum, sep="")
         listingUrlPart <- read_html(pageurl) %>% html_nodes(".search-listing") %>% html_node("a") %>% html_attr("href")
         checkExistance <- listingUrlPart[[1]]
@@ -42,7 +44,7 @@ getUrlFromAttr <- function(x) {
   url <- paste(homepage, x, sep="")
 }
 
-urls <- lapply(url.list, getUrlFromAttr)
+url.list <- lapply(url.list, getUrlFromAttr)
 
 getFullDetails <- function(url) {
   cat("\nNow processing:", url)
@@ -69,7 +71,33 @@ getFullDetails <- function(url) {
   }
 }
 cat("\nGetting details for all URLs\n")
-dat <- rbindlist(lapply(urls, getFullDetails), fill=TRUE, use.names = TRUE)
+
+# mclapply is not available on Windows.
+dat <- rbindlist(lapply(url.list, getFullDetails), fill=TRUE, use.names = TRUE)
+# Note: result of rbindlist is a data.table
+
+## fwrite(dat, file="iproperty.csv")
+
+# set factor for selected columns
+factor.cols <- c("Property Type", "Bedrooms", "Bathrooms", "Tenure", "Estate", "Unit Type", "Carpark", "Air Cond", "District")
+for (col in factor.cols) set(dat, j = col, value = as.factor(dat[[col]]))
+
+#remove colon and trailing spaces
+names(dat) <- trimws(sub(" :$", "", names(dat)))
+
+#combine two column name versions taken from different pages
+combineTwoColumns <- function (dt, regex) {
+  colnames <- dt[, names(.SD), .SDcols = names(dt) %like% regex] 
+  dt[, (colnames[1]) := ifelse(is.na(get(colnames[1])) | get(colnames[1]) == "View to offer", get(colnames[2]), get(colnames[1]))]
+  dt[, (colnames[2]) := NULL]
+}
+
+combineTwoColumns(dat, "^Asking.*(?i)psm")
+combineTwoColumns(dat, "^Asking.*(?i)psf")
+
+# set numeric for dollar values
+dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm"]
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD| |,","",dat[[j]]))))
 
 return(dat)
 elapsed.time <- (proc.time() - start.time)
