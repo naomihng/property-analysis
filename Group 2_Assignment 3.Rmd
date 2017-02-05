@@ -1,0 +1,130 @@
+---
+title: "Assignment 3"
+author: "Group 2"
+date: "2/3/2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+Cheryl Ter A0114401A	 
+Desiree Quah A0115546H      
+Naomi Huang A0116101E 
+Nelson Tan A0124473J  	 
+Nicholas Yeo 	A0112003L
+
+##Assignment 3 Q1
+
+```{R}
+#Create a matrix of 1s and 0s.
+X <- matrix(data=sample(c(0,1), replace=TRUE, size=30), nrow = 3, ncol = 10)
+
+#Function to determine vector based on majority of first c elements.
+find.majority <- function(X,c){
+  as.numeric(apply(X[ ,1:c], 1, sum) > c/2)
+}
+
+#Test function: Find vector for the first 3 columns of matrix X
+find.majority(X,3)
+```
+##Assignment 3 Q2
+###Extracting of data 
+
+installing libraries required
+```{R}
+library(data.table)
+library(magrittr)
+library(rvest)
+# library(parallel) #for mclappy
+```
+
+Get a list of urls
+```{R}
+start.time <- proc.time()
+
+homepage <- "https://www.iproperty.com.sg"
+homePageNum = "https://www.iproperty.com.sg/sale/property/?pg="
+
+pageNum = 1
+url.list <- character()
+switch <- 1
+cat("Processing page")
+while (switch == 1) {
+  tryCatch(
+    {   cat(pageNum)
+        pageurl <- paste(homePageNum, pageNum, sep="")
+        listingUrlPart <- read_html(pageurl) %>% html_nodes(".search-listing") %>% html_node("a") %>% html_attr("href")
+        checkExistance <- listingUrlPart[[1]]
+        url.list <- append(url.list, listingUrlPart)
+        pageNum <- pageNum + 1
+    },
+    error = function(cond) {
+      message("No results from this page: ", pageurl)
+      message("Here's the original error message:")
+      message(cond)
+      switch <<- 0
+    },
+    warning=function(cond) {
+      message(paste("URL caused a warning:", pageurl))
+      message("Here's the original warning message:")
+      message(cond)
+      return(NULL)
+    }
+  )
+}
+
+cat("\nEnded at page", pageNum)
+cat("\nGetting full URL strings")
+
+getUrlFromAttr <- function(x) {
+  url <- paste(homepage, x, sep="")
+}
+
+url.list <- lapply(url.list, getUrlFromAttr)
+got.urls <- proc.time()
+```
+
+From the list of property urls, get the details inside the urls
+
+```{R}
+getFullDetails <- function(url) {
+  cat("\nNow processing:", url)
+  finished <- FALSE
+  tries <- 1
+  while (finished == FALSE & tries <= 5) {
+    
+    tryCatch({
+      page <- read_html(url)
+      headings <- page %>% html_nodes(" .description-left h3, .table-list span") %>% html_text()
+      values <- page %>% html_nodes(" .description-left p, .table-list p") %>% html_text()
+      listing <- setNames(as.list(values), headings)
+      return(listing)
+      finished <<- TRUE
+    },
+    error = function(e) {
+      cat("\nNumber of tries:", tries)
+      message("Encountered error : ", e)
+      Sys.sleep(sample(seq(1, 5, by=0.001), 1))
+      tries <<- tries + 1
+      NULL
+    }
+    )
+  }
+}
+
+start.getting.details <- proc.time()
+cat("\nGetting details for all URLs\n")
+dat <- rbindlist(lapply(url.list, getFullDetails), fill=TRUE, use.names = TRUE)
+# mclapply is not available on Windows.
+# Note: result of rbindlist is a data.table with different manipulation syntax
+
+get.url.time <- (got.urls - start.time)
+get.details.time <- (proc.time() - start.getting.details )
+```
+
+write to csv 
+```{R}
+fwrite(dat, file="iproperty.csv")
+```
+
+### data cleaning and data analysis will be shown in Assignment 4 
