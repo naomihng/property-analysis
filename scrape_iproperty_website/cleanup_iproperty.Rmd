@@ -1,5 +1,6 @@
 ---
-title: "Cleaning up iproperty data"
+title: "Data Cleaning"
+
 output: html_document
 ---
 
@@ -7,22 +8,20 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Cleaning data scraped from iproperty.com.sg
 
-```{r libraries}
+```{r libraries, warning=FALSE}
 library(data.table)
-library(ggplot2)
 ```
 
 Loading data into R using data.table package
 
-```{r loading file}
+```{r loading file, warning=FALSE}
 dat <- fread("iproperty.csv")
 ```
 
-Cleaning
+##Cleaning data
 
-```{r cleaning}
+```{r cleaning, results= 'hide'}
 #remove colon and trailing spaces
 names(dat) <- trimws(sub(" :$", "", names(dat)))
 
@@ -58,50 +57,18 @@ names(dist) <- c("Property Type", "P.Type.Freq")
 dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
 dat <- merge(dat, dist, by = "Property Type", all=TRUE)
 
+# #Change District numbers to names
+
+DNsv<- c("Marina Area","CBD","Central South","South Keppel","South West","City Hall", "Beach Road", "Little India", "Orchard", "Tanglin", "Newton", "Toa Payoh", "Central East", "Eunous", "Katong", "Upper East Coast", "Changi", "Tampines", "Hougang", "Ang Mo Kio", "Central West", "Jurong", "North West", "Far North West", "Far North", "North", "Yishun", "Seletar")
+dat$District <- DNsv[dat$District]
+# to extract data and combine them together 
 ```
 
 Write cleaned data into CSV
-
 ```{r writing to csv}
 fwrite(dat, file="iproperty_cleaned.csv")
 ```
 
-## Plots
 
-Number of listings for each property type
-```{r number of property types}
-ggplot(dat, aes_string(x="`Property Type`")) + geom_bar() + coord_flip()
-```
 
-Types of properties in each district
-```{r}
-ggplot(dat, aes(x=District, fill=property.type.new)) + geom_bar(position="fill") + coord_flip()
-```
 
-Asking Price vs Built Up (sq. ft)
-```{r}
-ggplot(dat, aes(x=`Built up_sqft`, y=`Asking Price`, color=property.type.new)) + geom_point(alpha=0.1) + xlim(0,10000) + ylim(0,10000000) + stat_smooth(method="lm")
-
-```
-
-Asking Price (PSF) vs Built up by property type
-```{r}
-ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + ylim(400,3000) + xlim(0, 2500) + stat_smooth(method="lm")
-
-```
-
-For condominiums, PSF vs built up by district
-
-```{r}
-ggplot(dat[property.type.new == "Condominium",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=District)) + geom_point(alpha = .5) + ylim(400,3000) + xlim(300, 4000)
-```
-
-Density plot of districts
-```{r}
-ggplot(dat[!is.na(District),], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=District), alpha=0.5) + xlim(0,3000)
-```
-
-Density plot of property types
-```{r}
-ggplot(dat[!is.na(property.type.new)], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=property.type.new), alpha=0.5) + xlim(0,3000)
-```
