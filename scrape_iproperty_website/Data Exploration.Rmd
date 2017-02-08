@@ -1,0 +1,130 @@
+---
+title: "Data Exploration"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Data Exploration 
+###summary of the dataset
+
+```{r libraries, results='hide'}
+#Please install.packakes("ggmap", type="source")
+library(data.table)
+library(ggplot2)
+library(Hmisc)
+library(hexbin)
+library(ggmap)
+
+```
+
+
+```{r summary}
+dat <- fread("iproperty_cleaned.csv")
+summary(dat)
+str(dat)
+```
+The summary and structure of the data frame is shown above. From the structure of the data, more than 7000 unique property listings were crawled from the iproperty website.  The summary table for District shows that properties listed in iproperty were mainly located in District 10 and 19. In addition, most properties listed on iproperty were offered at 99 Years Tenure, and then freehold properties. This seems to suggest that most properties were apartments as 99 Years Tenure was catered to apartment flats.
+
+###IProperty Target business 
+
+####Heat map of no.of listing to SIngapore map 
+```{r Heat Map}
+sing<-get_map(location = "singapore", zoom = 11,color="bw")
+ggmap(sing, extent = "device") + geom_density2d(data = dat, 
+  aes(x = MapLon, y = MapLat), size = 0.3) + stat_density2d(data = dat, 
+  aes(x = MapLon, y = MapLat, fill = ..level.., alpha = ..level..), size = 0.01, 
+  bins = 99, geom = "polygon") + scale_fill_gradient(low = "green", high = "red") + 
+  scale_alpha(range = c(0, 0.3), guide = FALSE)
+```
+
+Utilizing the ggmap package and a geometric density graph, we obtained a heat map displaying the locations and concentration of iproperty listings in Singapore. Unsurprisingly, districts 2 (CBD), 3 (Central South), 6 (City Hall), 9 (Orchard), and 10 (Tanglin) have the highest number of listings given the high appeal of residential units there as well as availability of office and retail space.  In contrast, there are 0 listings in district 24 (Far North West - Kranji, Lim Chu Kang, Sungei Gedong and Tengah), which can be explained by the presence of cemeteries, farms and a military base occupying the area. Other uncovered areas are mostly airports and nature reserves. 
+
+####heatmap of prices
+```{r}
+sing2 <-get_map(location="singapore",color="bw",zoom=11,source="google")
+sing.map<-ggmap(sing2)
+datmap <-dat[complete.cases(dat[,13:14])]
+sm <- sing.map + geom_point(data=datmap, aes(x=MapLon, y=MapLat, color=`Asking (PSF)`)) + scale_color_gradient(low = "yellow",high ="red", limits=c(0,10000) ) +labs(y = "Latitude", x="Longitude")
+sm
+```
+
+Similarly where the ggmap package was used with a scatter plot, the asking price (PSF) for properties was visualized on a heatmap as shown above. The aim of this was to determine the degree prices are influenced by district and to identify more expensive areas. There is a general homogenous asking price (PSF) across the island except for the city area. Around the city center of Singapore, the asking price (PSF) has shown an increase to the $5000 mark, as compared to below $2500. Properties located in the same aforementioned districts 2, 3, 6, 9 and 10 see the highest price PSF indicating the existence of a positive relationship between the number of listings and asking price PSF. Generally from the map we can see that properties on Sentosa island (district 4) are also especially expensive compared to the mainland. 
+
+####Number of listings for each property type
+```{r number of property types}
+ggplot(dat, aes_string(x="`Property Type`")) + geom_bar() + coord_flip()+ ggtitle('Number of listing for each property type')
+```
+
+From this bar chart, Condominium listings far outnumber those of other property types, which is surprising given the majority of Singaporeans living and owning public housing. On further examination of 3-5 room HDB flats, listings decrease as the number of rooms in the unit increases.
+
+####Types of properties in each district seperated by property type
+Property type with less than 200 frequency is removed.
+ 
+```{r}
+ggplot(dat, aes(x=District, fill=property.type.new)) + geom_bar(position="fill") + coord_flip()+ ggtitle("Number of listing against district by Property type")
+```
+
+From this bar chart we can clearly distinguish between the more commercial and industrial areas in Singapore. Areas such as CBD, City Hall and the Marina area have office listings making 25% to 50% of the total listings whilst Jurong and Eunos are see a relatively higher % of industrial listings. Notably, all HDB flats were assigned the district NA within the dataset and therefore do not appear in any district. Once again, we see the prominence of condominium listings on the iproperty.com website. 
+
+###Finding Relationships 
+
+####Asking Price (PSF) vs Built up by property type
+```{r}
+ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + ylim(400,3000) + xlim(400, 2500) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area')
+```
+
+The best-fit lines on the scatter plot suggest a negative relationship between Asking (PSF) and Built up sq. ft. The most sensitive of the property types to an increase in sq ft. seem to be offices and 5 Room HDB Flats given their steepest decline in asking (PSF), whilst their 3 and 4 room counterparts and condominiums are the least. The only exception to this rule is semi-detached listings, which demand a premium with larger built up areas. 
+
+####density plot of property type 
+```{r}
+ggplot(dat[!is.na(property.type.new)& property.type.new != "Others"], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=property.type.new), alpha=0.5) + xlim(0,3000)
+```
+
+From the plot we see that 3, 4 and 5 room HDB flats have a relatively fixed cost per sq ft whilst all other types take a range of values. Low-rise apartments tend to have higher fixed cost per sq ft as compared to HDB flats, hi-rise apartments and even semi-detached houses, as can be observed from the peaks of the corresponding property types. Office and retail areas have the greatest variation in their cost per sq ft, as these property types do not have a distinct peak in the graph and there is similar density of properties for the range of asking price per sq ft. This could be due to a range of factors such as locations, quality of office space and facilities available.
+
+####boxplot of property type
+```{r boxplot}
+ggplot(dat, aes(x=`property.type.new`, y=`Asking (PSF)`)) + geom_boxplot() + coord_flip()
+```
+
+From the plot, we have identified 4 outliers - 1 in high-rise apartment, condominium, semi detached and in 3 Room HDB flat each. An analysis is done to identify the potential reason for such high Asking (PSF) so as to see whether they are justified or should be removed from the data set. 
+
+####Outlier Analysis
+```{r Outlier}
+outlier <- dat[`Property Type`=='Hi-Rise Apartment' & `Asking (PSF)`> 75000,]
+dat[`Property Type`=='Hi-Rise Apartment' & `Asking (PSF)`> 75000,]<- NA
+outlier.2 <- dat[`Property Type`=='3 Room HDB Flat' & `Asking (PSF)`> 40000,]
+dat[`Property Type`=='3 Room HDB Flat' & `Asking (PSF)`> 40000,]<- NA
+outlier.3 <- dat[`Property Type`=='Semi Detached' & `Asking (PSF)`> 20000,]
+dat[`Property Type`=='Semi Detached' & `Asking (PSF)`> 20000,] <- NA
+outlier.4 <- dat[`Property Type`=='Condominium' & `Asking (PSF)`> 10000,]
+dat[`Property Type`=='Condominium' & `Asking (PSF)`> 15000,] <- NA
+```
+#####Outlier 1 
+Outlier 1 is located in Yio Chu Kang with Asking Price of $1,650,000 with 17 sq ft. Its Asking (PSF) is 97058.82 which is around 60 times higher than the median of HI-rise aparment, not including the outlier. This is likely to be a wrong entry that should be deleted as a Spacious 3 Bedroom is unlikely to have 17sq ft of space. (a small 3 room flat in Singapore is have around 650 sq ft)
+
+#####Outlier 2 
+Outlier 2 is likely to be a wrong entry as well as it is a 3 room flat which only has 7 sq ft built up. 
+
+#####Outlier 3 
+Comparing its description and the built up, this is a wrong entry. Build up in the description was listed as 2496 sq ft, whilst in the Build up column, it was listed as 296 sq ft.
+
+#####Outlier 4
+From the website, it appears that this is an incorrect entry. Descrptions shows that whilst is near Orchard, another similiar corner unit in the same condominium estate "Latitude" with equivalent built up of 1324 sq ft and sold by the same agent is listed at asking (PSF) $1963.75, more than 9 times less than the $18126.89 asking (PSF) entered for this listing.     
+
+```{r}
+ggplot(dat[!is.na(property.type.new)& property.type.new != "Others"], aes(x=`property.type.new`, y=`Asking (PSF)`)) + geom_boxplot() + coord_flip()
+```
+
+From the plot, we can see that Retail has the highest median Asking (PSF) followed by Office. Retial and Office do also have relatively high variance. 
+
+####For condominiums, PSF vs built up by district
+```{r}
+ggplot(dat[`Property Type`== "Condominium"], aes(x=reorder(`District`,`Asking (PSF)`, median),`Asking (PSF)`)) + geom_boxplot(outlier.color = "red") + theme(axis.text.x = element_text(angle = 90)) + labs(x= "District", y = "Asking PSF $ (Condominium)")
+```
+
+Lastly, we examine Condominium Asking (PSF) in detail as they make up the bulk of the listings in the data set using a boxplot ordered by median asking (PSF). We see that the cheapest confominums based on mean asking (PSF) are in Changi, Far North (Admiralty, Woodlands) and Far North West given their far flung location. Those with the highest means are in the central business hubs of CBD and Marina Area as well as Orchard and Tanglin.
+
