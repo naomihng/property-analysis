@@ -12,6 +12,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r libraries}
 library(data.table)
 library(ggplot2)
+
+library(rvest)
+library(magrittr)
 ```
 
 Loading data into R using data.table package
@@ -41,16 +44,15 @@ combineTwoColumns(dat, "^Asking.*(?i)psf")
 
 # set numeric for dollar values
 dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
-for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD| |,","",dat[[j]]))))
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
 
 # convert rows in sq. m. to sq. ft
 area.cols = c("Built up", "Land")
-for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub(" sq. m", "", get(j))) * 10.7639, as.numeric(gsub(" sq. ft.", "", get(j))))]
+for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
 
 # Calculate missing Asking Price (PSF)
 # note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
 dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
-
 
 # Group less frequent property types into "Others"
 dist <- as.data.table(table(dat$`Property Type`))
@@ -59,6 +61,17 @@ dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)
 dat <- merge(dat, dist, by = "Property Type", all=TRUE)
 
 ```
+
+```{r}
+# get a mapping from District number to General Location for easier reading
+district_url <- "https://www.ura.gov.sg/realEstateIIWeb/resources/misc/list_of_postal_districts.htm"
+district.name <- read_html(district_url) %>% html_table(header=TRUE, trim=TRUE)
+district.name <- data.table(district.name[[1]])
+names(district.name) <- c("District", "PostalSector", "GeneralLocation")
+district.name[, PostalSector := NULL][,GeneralLocation := gsub("\r\n\\s+"," ",GeneralLocation)]
+dat <- merge(dat, district.name, by = "District", all=TRUE)
+```
+
 
 Write cleaned data into CSV
 
