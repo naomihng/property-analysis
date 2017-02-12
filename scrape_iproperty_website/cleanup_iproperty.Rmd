@@ -1,5 +1,6 @@
 ---
-title: "Cleaning up iproperty data"
+title: "Data Cleaning"
+
 output: html_document
 ---
 
@@ -7,25 +8,24 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Cleaning data scraped from iproperty.com.sg
 
-```{r libraries}
+```{r libraries, warning=FALSE}
 library(data.table)
-library(ggplot2)
-
+library(RCurl)
+library(XML)
 library(rvest)
 library(magrittr)
 ```
 
 Loading data into R using data.table package
 
-```{r loading file}
+```{r loading file, warning=FALSE}
 dat <- fread("iproperty.csv")
 ```
 
-Cleaning
+##Cleaning data
 
-```{r cleaning}
+```{r cleaning, results= 'hide'}
 #remove colon and trailing spaces
 names(dat) <- trimws(sub(" :$", "", names(dat)))
 
@@ -44,77 +44,82 @@ combineTwoColumns(dat, "^Asking.*(?i)psf")
 
 # set numeric for dollar values
 dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
-for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD| |,","",dat[[j]]))))
 
 # convert rows in sq. m. to sq. ft
 area.cols = c("Built up", "Land")
-for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
+for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub(" sq. m", "", get(j))) * 10.7639, as.numeric(gsub(" sq. ft.", "", get(j))))]
 
 # Calculate missing Asking Price (PSF)
 # note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
 dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
+``` 
 
+Converting Esate Data to district number 
+```{r estate to district}
+## Change Estate Location to District Number 
+regexes <- {list(c("(Boat Quay|Chinatown|Havelock Road|Marina Square|Raffles Place|Suntec City)",1),
+                c("(Anson Road|Chinatown|Neil Road|Raffles Place|Shenton Way|Tanjong Pagar)",2),
+                c("(Alexandra Road|Tiong Bahru|Queenstown)",3),
+                c("(Keppel|Mount Faber|Sentosa|Telok Blangah)",4),
+                c("(Buona Vista|Dover|Pasir Panjang|West Coast)",5),
+                c("(City Hall|High Street|North Bridge Road)",6),
+                c("(Beach Road|Bencoolen Road|Bugis|Rochor)",7),
+                c("(ittle India|Farrer Park|Serangoon Road)",8),
+                c("(Cairnhill|Killiney|Leonie Hill|Orchard|Oxley)",9),
+                c("(Balmoral|Bukit Timah|Grange Road|Holland|Orchard Boulevard|River Valley|Tanglin Road)",10),
+                c("(Chancery|Dunearn Road|Newton)",11),
+                c("(Balestier|Moulmein|Novena|Toa Payoh)",12),
+                c("(Potong Pasir|Macpherson)",13),
+                c("(Eunos|Geylang|Kembangan|Paya Lebar)",14),
+                c("(Katong|Marine Parade|Siglap|Tanjong Rhu)",15),
+                c("(Bayshore|Bedok|Chai Chee)",16),
+                c("(Changi|Loyang|Pasir Ris)",17),
+                c("(Simei|Tampines)",18),
+                c("(Hougang|Punggol|Sengkang)",19),
+                c("(Ang Mo Kio|Bishan|Braddell Road|Thomson)",20),
+                c("(Clementi|Upper Bukit Timah|Hume Avenue)",21),
+                c("(Boon Lay|Jurong|Tuas)",22),
+                c("(Bukit Batok|Choa Chu Kang|Hillview Avenue|Upper Bukit Timah)",23),
+                c("(Kranji|Lim Chu Kang|Sungei Gedong|Tengah)",24),
+                c("(Admiralty|Woodlands)",25),
+                c("(Tagore|Yio Chu Kang)",26),
+                c("(Admiralty|Sembawang|Yishun)",27),
+                c("(Seletar|Yio Chu Kang)",28))
+}
+
+
+                           for(i in seq_along(regexes)){
+dat$District[grepl(x = dat$Estate, pattern = regexes[[i]][1])] <- regexes[[i]][2]
+                           }
+```
+Getting District Data from the web and merging them 
+```{r crawl district info}
+url <- "https://keylocation.sg/singapore/districts-map"
+urldata<-getURL(url)
+data <-readHTMLTable(urldata)
+Region <- read_html(url) %>% html_nodes('h3') %>% html_text()
+data <- data[1:5]
+for (i in 1:5){
+  data[[i]]$Region <- Region[i]
+}
+district.data<- do.call(rbind,data)
+dat <- merge(dat,district.data, by.x = "District", by.y= "District",all = TRUE)
+```
+
+```{r}
 # Group less frequent property types into "Others"
 dist <- as.data.table(table(dat$`Property Type`))
 names(dist) <- c("Property Type", "P.Type.Freq")
 dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
 dat <- merge(dat, dist, by = "Property Type", all=TRUE)
-
 ```
-
-```{r}
-# get a mapping from District number to General Location for easier reading
-district_url <- "https://www.ura.gov.sg/realEstateIIWeb/resources/misc/list_of_postal_districts.htm"
-district.name <- read_html(district_url) %>% html_table(header=TRUE, trim=TRUE)
-district.name <- data.table(district.name[[1]])
-names(district.name) <- c("District", "PostalSector", "GeneralLocation")
-district.name[, PostalSector := NULL][,GeneralLocation := gsub("\r\n\\s+"," ",GeneralLocation)]
-dat <- merge(dat, district.name, by = "District", all=TRUE)
-```
-
 
 Write cleaned data into CSV
-
 ```{r writing to csv}
 fwrite(dat, file="iproperty_cleaned.csv")
 ```
 
-## Plots
 
-Number of listings for each property type
-```{r number of property types}
-ggplot(dat, aes_string(x="`Property Type`")) + geom_bar() + coord_flip()
-```
 
-Types of properties in each district
-```{r}
-ggplot(dat, aes(x=District, fill=property.type.new)) + geom_bar(position="fill") + coord_flip()
-```
 
-Asking Price vs Built Up (sq. ft)
-```{r}
-ggplot(dat, aes(x=`Built up_sqft`, y=`Asking Price`, color=property.type.new)) + geom_point(alpha=0.1) + xlim(0,10000) + ylim(0,10000000) + stat_smooth(method="lm")
-
-```
-
-Asking Price (PSF) vs Built up by property type
-```{r}
-ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + ylim(400,3000) + xlim(0, 2500) + stat_smooth(method="lm")
-
-```
-
-For condominiums, PSF vs built up by district
-
-```{r}
-ggplot(dat[property.type.new == "Condominium",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=District)) + geom_point(alpha = .5) + ylim(400,3000) + xlim(300, 4000)
-```
-
-Density plot of districts
-```{r}
-ggplot(dat[!is.na(District),], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=District), alpha=0.5) + xlim(0,3000)
-```
-
-Density plot of property types
-```{r}
-ggplot(dat[!is.na(property.type.new)], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=property.type.new), alpha=0.5) + xlim(0,3000)
-```
