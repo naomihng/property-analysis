@@ -15,6 +15,7 @@ library(RCurl)
 library(XML)
 library(rvest)
 library(magrittr)
+library(ggmap)
 ```
 
 Loading data into R using data.table package
@@ -94,7 +95,7 @@ dat$District[grepl(x = dat$Estate, pattern = regexes[[i]][1])] <- regexes[[i]][2
                            }
 ```
 Getting District Data from the web and merging them 
-```{r crawl district info}
+```{r crawl district info, results='hide'}
 url <- "https://keylocation.sg/singapore/districts-map"
 urldata<-getURL(url)
 data <-readHTMLTable(urldata)
@@ -104,8 +105,25 @@ for (i in 1:5){
   data[[i]]$Region <- Region[i]
 }
 district.data<- do.call(rbind,data)
+address <- paste0(district.data$Areas,", Singapore ") 
+x <- geocode(address)
+## change far north west to Kranji
+x[25,]<- geocode("Kranji ,Singapore", output = "latlon")
+district.data<- cbind(district.data,x)
 dat <- merge(dat,district.data, by.x = "District", by.y= "District",all = TRUE)
 ```
+Filling up empty latlon information
+```{r merge lon and lat}
+dat$MapLat<-ifelse(is.na(dat$MapLat),dat$lat,dat$MapLat)
+dat$MapLon<-ifelse(is.na(dat$MapLon),dat$lon,dat$MapLon)
+```
+
+```{r remove outliers}
+dat <- dat[!is.na(`QuikPro No`),]
+dat$`QuikPro No`<-as.factor(dat$`QuikPro No`)
+summary(dat$`QuikPro No`)
+```
+All Quickpro No are unique.  
 
 ```{r}
 # Group less frequent property types into "Others"
