@@ -45,11 +45,11 @@ combineTwoColumns(dat, "^Asking.*(?i)psf")
 
 # set numeric for dollar values
 dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
-for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD| |,","",dat[[j]]))))
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
 
 # convert rows in sq. m. to sq. ft
 area.cols = c("Built up", "Land")
-for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub(" sq. m", "", get(j))) * 10.7639, as.numeric(gsub(" sq. ft.", "", get(j))))]
+for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
 
 # Calculate missing Asking Price (PSF)
 # note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
@@ -110,7 +110,7 @@ x <- geocode(address)
 ## change far north west to Kranji
 x[25,]<- geocode("Kranji ,Singapore", output = "latlon")
 district.data<- cbind(district.data,x)
-dat <- merge(dat,district.data, by.x = "District", by.y= "District",all = TRUE)
+dat <- merge(dat,district.data, by= "District",all = TRUE)
 ```
 Filling up empty latlon information
 ```{r merge lon and lat}
