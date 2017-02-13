@@ -1,5 +1,6 @@
 ---
-title: "Cleaning up iproperty data"
+title: "Data Cleaning"
+
 output: html_document
 ---
 
@@ -7,24 +8,39 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Cleaning data scraped from iproperty.com.sg
 
-```{r libraries}
+```{r libraries, warning=FALSE}
 library(data.table)
-library(ggplot2)
+library(rvest)
+library(tidyr)
+library(ggmap)
 ```
 
 Loading data into R using data.table package
 
-```{r loading file}
+```{r loading file, warning=FALSE}
 dat <- fread("iproperty.csv")
 ```
 
-Cleaning
+##Cleaning data
 
-```{r cleaning}
+Clean column names
+```{r clean col names}
 #remove colon and trailing spaces
 names(dat) <- trimws(sub(" :$", "", names(dat)))
+```
+
+Check for duplicates
+```{r duplicates}
+dat[duplicated(`QuikPro No`),]
+#no duplicates
+
+# remove duplicates if exists
+dat <- dat[!duplicated(`QuikPro No`),]
+
+```
+
+```{r cleaning}
 
 # set factor for selected columns
 factor.cols <- c("Property Type", "Bedrooms", "Bathrooms", "Tenure", "Estate", "Unit Type", "Carpark", "Air Cond", "District")
@@ -41,67 +57,89 @@ combineTwoColumns(dat, "^Asking.*(?i)psf")
 
 # set numeric for dollar values
 dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
-for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD| |,","",dat[[j]]))))
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
 
 # convert rows in sq. m. to sq. ft
 area.cols = c("Built up", "Land")
-for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub(" sq. m", "", get(j))) * 10.7639, as.numeric(gsub(" sq. ft.", "", get(j))))]
+for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
 
 # Calculate missing Asking Price (PSF)
 # note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
 dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
+``` 
 
+Estate is filled where District is missing
+```{r}
+table(dat[is.na(District) & !is.na(Estate), Estate])
+```
 
-# Group less frequent property types into "Others"
+Getting District name, locations, region data from the keylocation.sg
+```{r crawl district info, results='hide'}
+url <- "https://keylocation.sg/singapore/districts-map"
+page <- read_html(url)
+district.data <- page %>% html_nodes("table") %>% html_table()
+Region <- page %>% html_nodes('h3') %>% html_text()
+for (i in 1:5){
+  district.data[[i]]$Region <- Region[i]
+}
+district.data<- do.call(rbind,district.data)
+names(district.data)[names(district.data) == "District"] <- "District.new"
+head(district.data)
+```
+
+Fill up records with missing District using Estate
+```{r get district from estate}
+district.data.long <- separate_rows(district.data, Location, sep = ", ")
+district.data.long <- district.data.long[,c("District.new", "Location")]
+
+# remove Locations appearing in more than one District
+district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
+
+dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
+dat[!is.na(District), District.new := District][,District.new := factor(District.new)]
+```
+
+To fill up missing Lat Lon, we can use Estate or District information
+```{r missing lat lon}
+sum(is.na(dat$MapLat))
+# Estate is mostly missing when lat long are missing
+table(dat[is.na(MapLat) & !is.na(Estate), Estate])
+```
+
+```{r}
+# District seems to be filled when lat lon are missing
+sum(is.na(dat$MapLat) & !is.na(dat$District.new))
+table(dat[is.na(MapLat) & !is.na(District.new), District.new])
+```
+
+Get Lat and Lon from District Name
+```{r get lat lon from district, results='hide'}
+address <- paste0(district.data$Areas,", Singapore") 
+latlon <- geocode(address)
+district.data<- cbind(district.data, latlon)
+## fill up missing lon lat for "Far North West" using "Kranji"
+district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
+dat <- merge(dat,district.data, by="District.new", all.x = TRUE)
+dat[!is.na(MapLat), lat := MapLat]
+dat[!is.na(MapLon), lon := MapLon]
+```
+
+Group less frequent property types into "Others" for easier analysis
+```{r}
 dist <- as.data.table(table(dat$`Property Type`))
 names(dist) <- c("Property Type", "P.Type.Freq")
 dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
 dat <- merge(dat, dist, by = "Property Type", all=TRUE)
-
 ```
 
 Write cleaned data into CSV
-
 ```{r writing to csv}
 fwrite(dat, file="iproperty_cleaned.csv")
 ```
 
-## Plots
+Updated columns for analyses are:
+District.new
+Lat
+Lon
+property.type.new
 
-Number of listings for each property type
-```{r number of property types}
-ggplot(dat, aes_string(x="`Property Type`")) + geom_bar() + coord_flip()
-```
-
-Types of properties in each district
-```{r}
-ggplot(dat, aes(x=District, fill=property.type.new)) + geom_bar(position="fill") + coord_flip()
-```
-
-Asking Price vs Built Up (sq. ft)
-```{r}
-ggplot(dat, aes(x=`Built up_sqft`, y=`Asking Price`, color=property.type.new)) + geom_point(alpha=0.1) + xlim(0,10000) + ylim(0,10000000) + stat_smooth(method="lm")
-
-```
-
-Asking Price (PSF) vs Built up by property type
-```{r}
-ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + ylim(400,3000) + xlim(0, 2500) + stat_smooth(method="lm")
-
-```
-
-For condominiums, PSF vs built up by district
-
-```{r}
-ggplot(dat[property.type.new == "Condominium",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=District)) + geom_point(alpha = .5) + ylim(400,3000) + xlim(300, 4000)
-```
-
-Density plot of districts
-```{r}
-ggplot(dat[!is.na(District),], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=District), alpha=0.5) + xlim(0,3000)
-```
-
-Density plot of property types
-```{r}
-ggplot(dat[!is.na(property.type.new)], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=property.type.new), alpha=0.5) + xlim(0,3000)
-```
