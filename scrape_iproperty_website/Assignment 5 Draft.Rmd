@@ -256,3 +256,10 @@ ggplotly(ggplot(dat[`Property Type`== "Condominium"], aes(x=reorder(`District`,`
 ```
 
 Lastly, we examine Condominium Asking (PSF) in detail as they make up the bulk of the listings in the data set using a boxplot ordered by median asking (PSF). We see that the cheapest confominums based on mean asking (PSF) are in Changi, Far North (Admiralty, Woodlands) and Far North West given their far flung location. Those with the highest means are in the central business hubs of CBD and Marina Area as well as Orchard and Tanglin.
+
+###Pivot Table
+```{r Pivot Table}
+library(rpivotTable)
+rpivotTable(dat, rows="property.type.new", col="District.new", aggregatorName="Average", 
+            vals="Asking (PSF)", rendererName="Table")
+```
