@@ -11,9 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r libraries, warning=FALSE}
 library(data.table)
-library(XML)
 library(rvest)
-# library(magrittr)
 library(tidyr)
 library(ggmap)
 ```
@@ -34,8 +32,12 @@ names(dat) <- trimws(sub(" :$", "", names(dat)))
 
 Check for duplicates
 ```{r duplicates}
-dat[duplicated(dat$`QuikPro No`),]
+dat[duplicated(`QuikPro No`),]
 #no duplicates
+
+# remove duplicates if exists
+dat <- dat[!duplicated(`QuikPro No`),]
+
 ```
 
 ```{r cleaning}
@@ -94,26 +96,30 @@ district.data.long <- district.data.long[,c("District.new", "Location")]
 district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
 
 dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
-dat[!is.na(District), District.new := District]
+dat[!is.na(District), District.new := District][,District.new := factor(District.new)]
 ```
 
 To fill up missing Lat Lon, we can use Estate or District information
 ```{r missing lat lon}
+sum(is.na(dat$MapLat))
 # Estate is mostly missing when lat long are missing
 table(dat[is.na(MapLat) & !is.na(Estate), Estate])
+```
 
+```{r}
 # District seems to be filled when lat lon are missing
-table(dat[is.na(MapLat) & !is.na(District), District])
+sum(is.na(dat$MapLat) & !is.na(dat$District.new))
+table(dat[is.na(MapLat) & !is.na(District.new), District.new])
 ```
 
 Get Lat and Lon from District Name
-```{r get lat lon from district}
+```{r get lat lon from district, results='hide'}
 address <- paste0(district.data$Areas,", Singapore") 
 latlon <- geocode(address)
 district.data<- cbind(district.data, latlon)
 ## fill up missing lon lat for "Far North West" using "Kranji"
 district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
-dat <- merge(dat,district.data, by.x= "District", by.y="District.new", all.x = TRUE)
+dat <- merge(dat,district.data, by="District.new", all.x = TRUE)
 dat[!is.na(MapLat), lat := MapLat]
 dat[!is.na(MapLon), lon := MapLon]
 ```
@@ -131,6 +137,9 @@ Write cleaned data into CSV
 fwrite(dat, file="iproperty_cleaned.csv")
 ```
 
-
-
+Updated columns for analyses are:
+District.new
+Lat
+Lon
+property.type.new
 
