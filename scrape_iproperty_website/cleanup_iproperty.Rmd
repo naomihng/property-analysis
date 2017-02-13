@@ -14,6 +14,8 @@ library(data.table)
 library(rvest)
 library(tidyr)
 library(ggmap)
+library(ggplot2)
+library(plotly)
 ```
 
 Loading data into R using data.table package
@@ -142,4 +144,36 @@ District.new
 Lat
 Lon
 property.type.new
+
+
+Graph of asking psf by built up, by property type
+```{r}
+ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + coord_cartesian(ylim=c(1000,2500),xlim=c(1400,2600)) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area')
+#Condominium's cost psf increases with increasing built up
+```
+
+
+Isolate condominiums' data
+```{r}
+condo <- dat[property.type.new=="Condominium",]
+```
+
+
+Cost psf by built up of condominiums, by districts (District.new)
+```{r}
+ggplot(condo[!is.na(District.new),], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=District.new)) + geom_point(alpha = .1) + ylim(50,3000) + xlim(0,8000) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area by District') + facet_wrap(~District.new)
+  #District 1, 7 and 25 has increasing cost psf by built up (Marina Area, Beach Road, Woodlands)
+```
+
+Cost psf by built up of condominiums, by area
+```{r}
+ggplot(condo[!is.na(Areas),], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=Areas)) + geom_point(alpha = .1) + ylim(500,3000) + xlim(0,4000) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area by Areas') + facet_wrap(~Areas)
+  #Marina area and Beach Road has increasing cost psf by increasing built up, similar to districts.
+```
+
+Cost psf by built up of condominiums, by region
+```{r}
+ggplot(condo[!is.na(Region),], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=Region)) + geom_point(alpha = .1) + ylim(500,2000) + xlim(0,4000) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area by Region') + facet_wrap(~Region)
+  #All districts cost psf decreases as built up increases.GOOD
+```
 
