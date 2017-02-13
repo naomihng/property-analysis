@@ -11,10 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r libraries, warning=FALSE}
 library(data.table)
-library(RCurl)
 library(XML)
 library(rvest)
-library(magrittr)
+# library(magrittr)
+library(tidyr)
 library(ggmap)
 ```
 
@@ -26,9 +26,19 @@ dat <- fread("iproperty.csv")
 
 ##Cleaning data
 
-```{r cleaning, results= 'hide'}
+Clean column names
+```{r clean col names}
 #remove colon and trailing spaces
 names(dat) <- trimws(sub(" :$", "", names(dat)))
+```
+
+Check for duplicates
+```{r duplicates}
+dat[duplicated(dat$`QuikPro No`),]
+#no duplicates
+```
+
+```{r cleaning}
 
 # set factor for selected columns
 factor.cols <- c("Property Type", "Bedrooms", "Bathrooms", "Tenure", "Estate", "Unit Type", "Carpark", "Air Cond", "District")
@@ -56,77 +66,60 @@ for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as
 dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
 ``` 
 
-Converting Esate Data to district number 
-```{r estate to district}
-## Change Estate Location to District Number 
-regexes <- {list(c("(Boat Quay|Chinatown|Havelock Road|Marina Square|Raffles Place|Suntec City)",1),
-                c("(Anson Road|Chinatown|Neil Road|Raffles Place|Shenton Way|Tanjong Pagar)",2),
-                c("(Alexandra Road|Tiong Bahru|Queenstown)",3),
-                c("(Keppel|Mount Faber|Sentosa|Telok Blangah)",4),
-                c("(Buona Vista|Dover|Pasir Panjang|West Coast)",5),
-                c("(City Hall|High Street|North Bridge Road)",6),
-                c("(Beach Road|Bencoolen Road|Bugis|Rochor)",7),
-                c("(ittle India|Farrer Park|Serangoon Road)",8),
-                c("(Cairnhill|Killiney|Leonie Hill|Orchard|Oxley)",9),
-                c("(Balmoral|Bukit Timah|Grange Road|Holland|Orchard Boulevard|River Valley|Tanglin Road)",10),
-                c("(Chancery|Dunearn Road|Newton)",11),
-                c("(Balestier|Moulmein|Novena|Toa Payoh)",12),
-                c("(Potong Pasir|Macpherson)",13),
-                c("(Eunos|Geylang|Kembangan|Paya Lebar)",14),
-                c("(Katong|Marine Parade|Siglap|Tanjong Rhu)",15),
-                c("(Bayshore|Bedok|Chai Chee)",16),
-                c("(Changi|Loyang|Pasir Ris)",17),
-                c("(Simei|Tampines)",18),
-                c("(Hougang|Punggol|Sengkang)",19),
-                c("(Ang Mo Kio|Bishan|Braddell Road|Thomson)",20),
-                c("(Clementi|Upper Bukit Timah|Hume Avenue)",21),
-                c("(Boon Lay|Jurong|Tuas)",22),
-                c("(Bukit Batok|Choa Chu Kang|Hillview Avenue|Upper Bukit Timah)",23),
-                c("(Kranji|Lim Chu Kang|Sungei Gedong|Tengah)",24),
-                c("(Admiralty|Woodlands)",25),
-                c("(Tagore|Yio Chu Kang)",26),
-                c("(Admiralty|Sembawang|Yishun)",27),
-                c("(Seletar|Yio Chu Kang)",28))
-}
-
-
-                           for(i in seq_along(regexes)){
-dat$District[grepl(x = dat$Estate, pattern = regexes[[i]][1])] <- regexes[[i]][2]
-                           }
+Estate is filled where District is missing
+```{r}
+table(dat[is.na(District) & !is.na(Estate), Estate])
 ```
-Getting District Data from the web and merging them 
+
+Getting District name, locations, region data from the keylocation.sg
 ```{r crawl district info, results='hide'}
 url <- "https://keylocation.sg/singapore/districts-map"
-urldata<-getURL(url)
-data <-readHTMLTable(urldata)
-Region <- read_html(url) %>% html_nodes('h3') %>% html_text()
-data <- data[1:5]
+page <- read_html(url)
+district.data <- page %>% html_nodes("table") %>% html_table()
+Region <- page %>% html_nodes('h3') %>% html_text()
 for (i in 1:5){
-  data[[i]]$Region <- Region[i]
+  district.data[[i]]$Region <- Region[i]
 }
-district.data<- do.call(rbind,data)
-address <- paste0(district.data$Areas,", Singapore ") 
-x <- geocode(address)
-## change far north west to Kranji
-x[25,]<- geocode("Kranji ,Singapore", output = "latlon")
-district.data<- cbind(district.data,x)
-dat <- merge(dat,district.data, by= "District",all = TRUE)
-```
-Filling up empty latlon information
-```{r merge lon and lat}
-dat$MapLat<-ifelse(is.na(dat$MapLat),dat$lat,dat$MapLat)
-dat$MapLon<-ifelse(is.na(dat$MapLon),dat$lon,dat$MapLon)
+district.data<- do.call(rbind,district.data)
+names(district.data)[names(district.data) == "District"] <- "District.new"
+head(district.data)
 ```
 
-```{r remove outliers}
-dat <- dat[!is.na(`QuikPro No`),]
-dat$`QuikPro No`<-as.factor(dat$`QuikPro No`)
-summary(dat$`QuikPro No`)
-```
-All Quickpro No are unique.  
+Fill up records with missing District using Estate
+```{r get district from estate}
+district.data.long <- separate_rows(district.data, Location, sep = ", ")
+district.data.long <- district.data.long[,c("District.new", "Location")]
 
+# remove Locations appearing in more than one District
+district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
+
+dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
+dat[!is.na(District), District.new := District]
+```
+
+To fill up missing Lat Lon, we can use Estate or District information
+```{r missing lat lon}
+# Estate is mostly missing when lat long are missing
+table(dat[is.na(MapLat) & !is.na(Estate), Estate])
+
+# District seems to be filled when lat lon are missing
+table(dat[is.na(MapLat) & !is.na(District), District])
+```
+
+Get Lat and Lon from District Name
+```{r get lat lon from district}
+address <- paste0(district.data$Areas,", Singapore") 
+latlon <- geocode(address)
+district.data<- cbind(district.data, latlon)
+## fill up missing lon lat for "Far North West" using "Kranji"
+district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
+dat <- merge(dat,district.data, by.x= "District", by.y="District.new", all.x = TRUE)
+dat[!is.na(MapLat), lat := MapLat]
+dat[!is.na(MapLon), lon := MapLon]
+```
+
+Group less frequent property types into "Others" for easier analysis
 ```{r}
-# Group less frequent property types into "Others"
 dist <- as.data.table(table(dat$`Property Type`))
 names(dist) <- c("Property Type", "P.Type.Freq")
 dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
