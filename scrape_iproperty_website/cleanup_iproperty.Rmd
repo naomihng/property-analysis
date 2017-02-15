@@ -78,7 +78,9 @@ Getting District name, locations, region data from the keylocation.sg
 url <- "https://keylocation.sg/singapore/districts-map"
 page <- read_html(url)
 district.data <- page %>% html_nodes("table") %>% html_table()
+# Region name is given in a separate H3 tag
 Region <- page %>% html_nodes('h3') %>% html_text()
+# Associate region name with districts in the region
 for (i in 1:5){
   district.data[[i]]$Region <- Region[i]
 }
@@ -89,13 +91,14 @@ head(district.data)
 
 Fill up records with missing District using Estate
 ```{r get district from estate}
+# separate comma separated locations into rows
 district.data.long <- separate_rows(district.data, Location, sep = ", ")
-district.data.long <- district.data.long[,c("District.new", "Location")]
 
-# remove Locations appearing in more than one District
+# exclude Locations appearing in more than one District
 district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
-
+# merge with original data to associate estate with district
 dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
+# use original district if it exists
 dat[!is.na(District), District.new := District][,District.new := factor(District.new)]
 ```
 
@@ -114,17 +117,20 @@ table(dat[is.na(MapLat) & !is.na(District.new), District.new])
 
 Get Lat and Lon from District Name
 ```{r get lat lon from district, results='hide'}
+# using area names corresponding to district numbers obtained from keylocation.sg to get lat and lon
 address <- paste0(district.data$Areas,", Singapore") 
 latlon <- geocode(address)
 district.data<- cbind(district.data, latlon)
-## fill up missing lon lat for "Far North West" using "Kranji"
+# fill up missing lon lat for "Far North West" using "Kranji" as address
 district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
+# merge with original dataset to associate lat and lon with district number
 dat <- merge(dat,district.data, by="District.new", all.x = TRUE)
+# use original values of lat and lon if given
 dat[!is.na(MapLat), lat := MapLat]
 dat[!is.na(MapLon), lon := MapLon]
 ```
 
-Group less frequent property types into "Others" for easier analysis
+There are too many types of properties, some of them with few listings. Group less frequent property types into "Others" for easier visualization.
 ```{r}
 dist <- as.data.table(table(dat$`Property Type`))
 names(dist) <- c("Property Type", "P.Type.Freq")
