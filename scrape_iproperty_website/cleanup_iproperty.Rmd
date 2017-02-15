@@ -93,6 +93,7 @@ Fill up records with missing District using Estate
 ```{r get district from estate}
 # separate comma separated locations into rows
 district.data.long <- separate_rows(district.data, Location, sep = ", ")
+district.data.long <- district.data.long[,c("District.new", "Location")]
 
 # exclude Locations appearing in more than one District
 district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
