@@ -1,0 +1,292 @@
+---
+title: "Data Exploration"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libraries, warning=FALSE}
+library(data.table)
+library(rvest)
+library(tidyr)
+library(ggmap)
+```
+
+Loading data into R using data.table package
+
+```{r loading file, warning=FALSE}
+dat <- fread("iproperty.csv")
+```
+
+##Cleaning data
+
+Clean column names
+```{r clean col names}
+#remove colon and trailing spaces
+names(dat) <- trimws(sub(" :$", "", names(dat)))
+```
+
+Check for duplicates
+```{r duplicates}
+dat[duplicated(`QuikPro No`),]
+#no duplicates
+
+# remove duplicates if exists
+dat <- dat[!duplicated(`QuikPro No`),]
+
+```
+
+```{r cleaning,results='hide'}
+
+# set factor for selected columns
+factor.cols <- c("Property Type", "Bedrooms", "Bathrooms", "Tenure", "Estate", "Unit Type", "Carpark", "Air Cond", "District")
+for (j in factor.cols) set(dat, j = j, value = as.factor(dat[[j]]))
+
+#combine two name versions taken from different pages
+combineTwoColumns <- function (dt, regex) {
+  colnames <- dt[, names(.SD), .SDcols = names(dt) %like% regex]
+  dt[is.na(get(colnames[1])) | get(colnames[1]) == "View to offer", colnames[1] := get(colnames[2])][, (colnames[2]) := NULL]
+}
+
+combineTwoColumns(dat, "^Asking.*(?i)psm")
+combineTwoColumns(dat, "^Asking.*(?i)psf")
+
+# set numeric for dollar values
+dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
+for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
+
+# convert rows in sq. m. to sq. ft
+area.cols = c("Built up", "Land")
+for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
+
+# Calculate missing Asking Price (PSF)
+# note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
+dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
+``` 
+
+Estate is filled where District is missing
+```{r}
+table(dat[is.na(District) & !is.na(Estate), Estate])
+```
+
+Getting District name, locations, region data from the keylocation.sg
+```{r crawl district info, results='hide'}
+url <- "https://keylocation.sg/singapore/districts-map"
+page <- read_html(url)
+district.data <- page %>% html_nodes("table") %>% html_table()
+Region <- page %>% html_nodes('h3') %>% html_text()
+for (i in 1:5){
+  district.data[[i]]$Region <- Region[i]
+}
+district.data<- do.call(rbind,district.data)
+names(district.data)[names(district.data) == "District"] <- "District.new"
+head(district.data)
+```
+
+Fill up records with missing District using Estate
+```{r get district from estate, results='hide'}
+district.data.long <- separate_rows(district.data, Location, sep = ", ")
+district.data.long <- district.data.long[,c("District.new", "Location")]
+
+# remove Locations appearing in more than one District
+district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
+
+dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
+dat[!is.na(District), District.new := District][,District.new := factor(District.new)]
+```
+
+To fill up missing Lat Lon, we can use Estate or District information
+```{r missing lat lon}
+sum(is.na(dat$MapLat))
+# Estate is mostly missing when lat long are missing
+table(dat[is.na(MapLat) & !is.na(Estate), Estate])
+```
+
+```{r}
+# District seems to be filled when lat lon are missing
+sum(is.na(dat$MapLat) & !is.na(dat$District.new))
+table(dat[is.na(MapLat) & !is.na(District.new), District.new])
+```
+
+Get Lat and Lon from District Name 
+District Name is set as an approximation to the location of the property
+```{r get lat lon from district, echo=FALSE, results='hide'}
+address <- paste0(district.data$Areas,", Singapore") 
+latlon <- geocode(address)
+district.data<- cbind(district.data, latlon)
+## fill up missing lon lat for "Far North West" using "Kranji"
+district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
+dat <- merge(dat,district.data, by="District.new", all.x = TRUE)
+dat[!is.na(MapLat), lat := MapLat]
+dat[!is.na(MapLon), lon := MapLon]
+```
+
+Group less frequent property types into "Others" for easier analysis
+```{r}
+dist <- as.data.table(table(dat$`Property Type`))
+names(dist) <- c("Property Type", "P.Type.Freq")
+dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
+dat <- merge(dat, dist, by = "Property Type", all=TRUE)
+```
+
+```{r changing dataframe}
+# set factor for selected columns
+factor.cols <- c("District","District.new", "Property Type", "property.type.new", "Bedrooms", "Bathrooms", "Areas", "Region" )
+for (j in factor.cols) set(dat, j = j, value = as.factor(dat[[j]]))
+```
+
+Write cleaned data into CSV
+```{r writing to csv}
+fwrite(dat, file="iproperty_cleaned.csv")
+```
+
+Updated columns for analyses are:
+District.new
+Lat
+Lon
+property.type.new
+
+##Data Exploration 
+
+
+```{r, results='hide'}
+library(ggplot2)
+library(plotly)
+```
+
+###summary of the dataset
+```{r summary}
+summary(dat)
+str(dat)
+```
+We have a good sample size to work with. We will be working the the variables that have less than 5% of the missing values. Variables we will be focusing on are:  property Type, Asking price, ASking (PSf), Built up_sqft,  property.type.new, built ulat, lon, Areas and Region. from the summary data, there seems to be a few outliers. We will proceed to identify and remove potential outliers that are due to wrong entry. 
+
+
+###Outlier Analysis
+
+```{r }
+ggplotly(ggplot(dat, aes(x=`property.type.new`, y=`Asking (PSF)`)) + geom_boxplot() + coord_flip())
+```
+
+```{r Outlier}
+outlier.1 <- dat[`Property Type`=='Hi-Rise Apartment' & `Asking (PSF)`> 75000,]
+dat[`Property Type`=='Hi-Rise Apartment' & `Asking (PSF)`> 75000,]<- NA
+outlier.2 <- dat[`Property Type`=='3 Room HDB Flat' & `Asking (PSF)`> 40000,]
+dat[`Property Type`=='3 Room HDB Flat' & `Asking (PSF)`> 40000,]<- NA
+outlier.3 <- dat[`Property Type`=='Semi Detached' & `Asking (PSF)`> 20000,]
+dat[`Property Type`=='Semi Detached' & `Asking (PSF)`> 20000,] <- NA
+outlier.4 <- dat[`Property Type`=='Condominium' & `Asking (PSF)`> 10000,]
+dat[`Property Type`=='Condominium' & `Asking (PSF)`> 15000,] <- NA
+```
+#####Outlier 1 
+Outlier 1 is located in Yio Chu Kang with Asking Price of $1,650,000 with 17 sq ft. Its Asking (PSF) is 97058.82 which is around 60 times higher than the median of HI-rise aparment, not including the outlier. This is likely to be a wrong entry that should be deleted as a Spacious 3 Bedroom is unlikely to have 17sq ft of space. (a small 3 room flat in Singapore is have around 650 sq ft)
+
+#####Outlier 2 
+Outlier 2 is likely to be a wrong entry as well as it is a 3 room flat which only has 7 sq ft built up. 
+
+#####Outlier 3 
+Comparing its description and the built up, this is a wrong entry. Build up in the description was listed as 2496 sq ft, whilst in the Build up column, it was listed as 296 sq ft.
+
+#####Outlier 4
+From the website, it appears that this is an incorrect entry. Descrptions shows that whilst is near Orchard, another similiar corner unit in the same condominium estate "Latitude" with equivalent built up of 1324 sq ft and sold by the same agent is listed at asking (PSF) $1963.75, more than 9 times less than the $18126.89 asking (PSF) entered for this listing.     
+
+
+###IProperty Target business 
+
+####Heat map of no.of listing to SIngapore map 
+```{r Heat Map}
+sing<-get_map(location = "singapore", zoom = 11,color="bw")
+ggmap(sing, extent = "device") + geom_density2d(data = dat, 
+  aes(x = lon, y = lat), size = 0.3) + stat_density2d(data = dat, 
+  aes(x = lon, y = lat, fill = ..level.., alpha = ..level..), size = 0.01, 
+  bins = 99, geom = "polygon") + scale_fill_gradient(low = "green", high = "red") + 
+  scale_alpha(range = c(0, 0.3), guide = FALSE)
+```
+
+Utilizing the ggmap package and a geometric density graph, we obtained a heat map displaying the locations and concentration of iproperty listings in Singapore. There are two distinct hot spots as seen from the heat map. The first and largest spot comprises of districts encompassing CBD, Central South, City Hall, Orchard and Tanglin. The large number of listings is not surprising given the high appeal of residential units there as well as availability of office and retail space. Central West is also another hot spot as the properties in this district are also popular and may thus explain the higher number of listings. Eunos also seems to be relatively more listings than the other remaining districts.  In contrast, there are 0 listings in district 24 (Far North West - Kranji, Lim Chu Kang, Sungei Gedong and Tengah), which can be explained by the presence of cemeteries, farms and a military base occupying the area. Other uncovered areas are mostly airports and nature reserves. 
+
+####heatmap of prices
+```{r}
+sing2 <-get_map(location="singapore",color="bw",zoom=11,source="google")
+sing.map<-ggmap(sing2)
+sm <- sing.map + geom_point(data=dat[!is.na(lat) & !is.na(`Asking (PSF)`),], aes(x=lon, y=lat, color=`Asking (PSF)`)) + scale_color_gradient(low = "yellow",high ="red", limits=c(0,10000) ) +labs(y = "Latitude", x="Longitude")
+sm
+```
+
+Similarly  the ggmap package was used with a scatter plot to visualize the asking price (PSF) for properties on a heatmap as shown above. The aim of this was to determine the degree prices are influenced by district and to identify more expensive areas. There is a general homogenous asking price (PSF) across the island except for the city area. Most of the listings are generally below $2500. As the listing converges to the city center, the asking price (PSF) showed an increase to the $5000 mark. It is worth noting that the CBD area has more number of properties listed as well as more expensive asking price, suggesting that might be a positive correlation between the number of listings and asking price PSF. While one would expect properties listed on Sentosa to be much more expensive (in terms of price per sq feet) than those on mainland, that did not seem to be the case from these listings. Instead most properties on Sentosa were below the $5000 psf mark.
+
+####Number of listings for each property type
+```{r number of property types}
+ggplotly(ggplot(dat[!is.na(property.type.new),], aes_string(x="`property.type.new`")) + geom_bar() + coord_flip()+ ggtitle('Number of listing for each property type'))
+```
+
+From this bar chart, Condominium listings far outnumber those of other property types, which is surprising given the majority of Singaporeans living and owning public housing. On further examination of 3-5 room HDB flats, listings decrease as the number of rooms in the unit increases.
+
+####Types of properties in each district seperated by property type
+Property type with less than 200 frequency is removed.
+ 
+```{r}
+ggplotly(ggplot(dat[!is.na(Areas)], aes(x=Areas, fill=property.type.new)) + geom_bar(position="fill") + coord_flip()+ ggtitle("Number of listing against district by Property type"))
+```
+
+From this bar chart we can clearly distinguish between the more commercial and industrial areas in Singapore. Areas such as CBD, City Hall and the Marina area have office listings making 25% to 50% of the total listings whilst Jurong and Eunos are see a relatively higher % of industrial listings. Notably, all HDB flats were assigned the district NA within the dataset and therefore do not appear in any district. Once again, we see the prominence of condominium listings on the iproperty.com website. 
+
+###Finding Relationships 
+
+####Asking Price (PSF) vs Built up by property type
+```{r}
+ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + ylim(400,3000) + xlim(400, 2500) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area')
+```
+
+The best-fit lines on the scatter plot suggest a negative relationship between Asking (PSF) and Built up sq. ft. The most sensitive of the property types to an increase in sq ft. seem to be offices and 5 Room HDB Flats given their steepest decline in asking (PSF), whilst their 3 and 4 room counterparts and condominiums are the least. The only exception to this rule is semi-detached listings, which demand a premium with larger built up areas but have a high standard error. 
+
+zooming in for a closer look, we changed the y limit and x limit to exclude the potential outliers that might skew the data.  
+
+```{r}
+ggplot(dat[!is.na(property.type.new) & property.type.new != "Others",], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=property.type.new)) + geom_point(alpha = .1) + coord_cartesian(ylim=c(250,5000),xlim=c(100,12500)) + stat_smooth(method="lm")+ ggtitle('Cost per sq ft against Land area by property type ')
+```
+
+Here, Semi Detached is decreasing with a lower standard error, we can assume that semi Detached ASking (PSF) decreases with built up. Having a closing look at condo property type, there is an increase in Asking (PSF) to built up and further analysis will be shown below. 
+
+#####Condo analysis
+Isolate condominiums' data
+```{r}
+condo <- dat[property.type.new=="Condominium",]
+```
+
+
+```{r}
+ggplot(condo[!is.na(Region),], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=Region)) + geom_point(alpha = .1) + ylim(500,4000) + xlim(0,4000) + stat_smooth(method="lm")+ ggtitle(' Condo Cost per sq ft against Land area by Region') + facet_wrap(~Region)
+```
+
+From the graph, Central's asking (Psf) for 1 sq ft is higher compared to the other region. There seems to be an increasing rate of asking psf per sq ft. One hypothesis is due to popular demand and limited space, people are able to charger higer per sq ft for an increase in sq ft.  
+
+```{r}
+ggplot(condo[!is.na(Areas),], aes(x=`Built up_sqft`, y=`Asking (PSF)`, color=Areas)) + geom_point(alpha = .1) + ylim(500,3000) + xlim(0,4000) + stat_smooth(method="lm")+ ggtitle('Condo Cost per sq ft against Land area by Areas') + facet_wrap(~Areas)
+```
+
+Marina area and Beach Road has increasing cost psf by increasing built up. To get the most value for money, buyers can purchase a condo in little India area instead as it is located in the Central Region and near Marina area and Beach Road. 
+
+
+####density plot of property type 
+```{r}
+ggplotly(ggplot(dat[!is.na(property.type.new)& property.type.new != "Others"], aes(x=`Asking (PSF)`)) + geom_density(aes(fill=property.type.new), alpha=0.5) + xlim(0,3000) + ggtitle('Density plot of property type'))
+```
+
+From the plot we see that 3, 4 and 5 room HDB flats have a relatively fixed cost per sq ft whilst all other types take a range of values. Low-rise apartments tend to have higher fixed cost per sq ft as compared to HDB flats, hi-rise apartments and even semi-detached houses, as can be observed from the peaks of the corresponding property types. Office and retail areas have the greatest variation in their cost per sq ft, as these property types do not have a distinct peak in the graph and there is similar density of properties for the range of asking price per sq ft. This could be due to a range of factors such as locations, quality of office space and facilities available.
+
+###Pivot Table
+Interactive chart
+```{r Pivot Table}
+#library(devtools)
+#install_github("ramnathv/htmlwidgets") 
+#install_github("smartinsightsfromdata/rpivotTable")
+library(rpivotTable)
+rpivotTable(dat, rows="property.type.new", col="District.new", aggregatorName="Average", 
+            vals="Asking (PSF)", rendererName="Table")
+```
