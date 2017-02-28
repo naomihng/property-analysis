@@ -1,7 +1,7 @@
-# business-analytics-r
-A collection of small projects in R
+# property-analysis
+Exploring property data from the Singapore property website www.iproperty.com.sg in R.
 
-Includes:
-* Scraping website
-* Cleaning scraped data
-* Data visualization
+Code includes:
+* a scraper
+* cleaning scraped data
+* data visualization
