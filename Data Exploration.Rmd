@@ -4,152 +4,9 @@ output: html_document
 ---
 
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
-
-```{r libraries, warning=FALSE}
-library(data.table)
-library(rvest)
-library(tidyr)
-library(ggmap)
-```
-
-Loading data into R using data.table package
-
-```{r loading file, warning=FALSE}
-dat <- fread("iproperty.csv")
-```
-
-##Cleaning data
-
-Clean column names
-```{r clean col names}
-#remove colon and trailing spaces
-names(dat) <- trimws(sub(" :$", "", names(dat)))
-```
-
-Check for duplicates
-```{r duplicates}
-dat[duplicated(`QuikPro No`),]
-#no duplicates
-
-# remove duplicates if exists
-dat <- dat[!duplicated(`QuikPro No`),]
-
-```
-
-```{r cleaning,results='hide'}
-
-# set factor for selected columns
-factor.cols <- c("Property Type", "Bedrooms", "Bathrooms", "Tenure", "Estate", "Unit Type", "Carpark", "Air Cond", "District")
-for (j in factor.cols) set(dat, j = j, value = as.factor(dat[[j]]))
-
-#combine two name versions taken from different pages
-combineTwoColumns <- function (dt, regex) {
-  colnames <- dt[, names(.SD), .SDcols = names(dt) %like% regex]
-  dt[is.na(get(colnames[1])) | get(colnames[1]) == "View to offer", colnames[1] := get(colnames[2])][, (colnames[2]) := NULL]
-}
-
-combineTwoColumns(dat, "^Asking.*(?i)psm")
-combineTwoColumns(dat, "^Asking.*(?i)psf")
-
-# set numeric for dollar values
-dollar.cols <- dat[, names(.SD), .SDcols = names(dat) %like% "Asking|(?i)psf|(?i)psm" | names(dat) == "Age"]
-for (j in dollar.cols) set(dat, j=j, value=(as.numeric(gsub("SGD|\\s+|,|View to offer","",dat[[j]]))))
-
-# convert rows in sq. m. to sq. ft
-area.cols = c("Built up", "Land")
-for (j in area.cols) dat[, paste0(j,"_sqft") := ifelse(get(j) %like% "sq. m", as.numeric(gsub("sq. m|\\s+", "", get(j))) * 10.7639, as.numeric(gsub("sq. ft.|\\s+", "", get(j))))]
-
-# Calculate missing Asking Price (PSF)
-# note given PSM actually means PSF, but below code uses Asking Price and area to calculate PSF
-dat[is.na(`Asking (PSF)`), `Asking (PSF)` := `Asking Price` / `Built up_sqft`]
-``` 
-
-Estate is filled where District is missing
-```{r}
-table(dat[is.na(District) & !is.na(Estate), Estate])
-```
-
-Getting District name, locations, region data from the keylocation.sg
-```{r crawl district info, results='hide'}
-url <- "https://keylocation.sg/singapore/districts-map"
-page <- read_html(url)
-district.data <- page %>% html_nodes("table") %>% html_table()
-Region <- page %>% html_nodes('h3') %>% html_text()
-for (i in 1:5){
-  district.data[[i]]$Region <- Region[i]
-}
-district.data<- do.call(rbind,district.data)
-names(district.data)[names(district.data) == "District"] <- "District.new"
-head(district.data)
-```
-
-Fill up records with missing District using Estate
-```{r get district from estate, results='hide'}
-district.data.long <- separate_rows(district.data, Location, sep = ", ")
-district.data.long <- district.data.long[,c("District.new", "Location")]
-
-# remove Locations appearing in more than one District
-district.data.long <- district.data.long[!(duplicated(district.data.long$Location) | duplicated(district.data.long$Location, fromLast = TRUE)),]
-
-dat <- merge(dat, district.data.long, by.x = "Estate", by.y="Location", all.x=TRUE)
-dat[!is.na(District), District.new := District][,District.new := factor(District.new)]
-```
-
-To fill up missing Lat Lon, we can use Estate or District information
-```{r missing lat lon}
-sum(is.na(dat$MapLat))
-# Estate is mostly missing when lat long are missing
-table(dat[is.na(MapLat) & !is.na(Estate), Estate])
-```
-
-```{r}
-# District seems to be filled when lat lon are missing
-sum(is.na(dat$MapLat) & !is.na(dat$District.new))
-table(dat[is.na(MapLat) & !is.na(District.new), District.new])
-```
-
-Get Lat and Lon from District Name 
-District Name is set as an approximation to the location of the property
-```{r get lat lon from district, echo=FALSE, results='hide'}
-address <- paste0(district.data$Areas,", Singapore") 
-latlon <- geocode(address)
-district.data<- cbind(district.data, latlon)
-## fill up missing lon lat for "Far North West" using "Kranji"
-district.data[district.data$Areas=="Far North West" & is.na(district.data$lon), c("lon", "lat")] <- geocode("Kranji, Singapore")
-dat <- merge(dat,district.data, by="District.new", all.x = TRUE)
-dat[!is.na(MapLat), lat := MapLat]
-dat[!is.na(MapLon), lon := MapLon]
-```
-
-Group less frequent property types into "Others" for easier analysis
-```{r}
-dist <- as.data.table(table(dat$`Property Type`))
-names(dist) <- c("Property Type", "P.Type.Freq")
-dist[, property.type.new := ifelse(P.Type.Freq < 200, "Others", `Property Type`)]
-dat <- merge(dat, dist, by = "Property Type", all=TRUE)
-```
-
-```{r changing dataframe}
-# set factor for selected columns
-factor.cols <- c("District","District.new", "Property Type", "property.type.new", "Bedrooms", "Bathrooms", "Areas", "Region" )
-for (j in factor.cols) set(dat, j = j, value = as.factor(dat[[j]]))
-```
-
-Write cleaned data into CSV
-```{r writing to csv}
-fwrite(dat, file="iproperty_cleaned.csv")
-```
-
-Updated columns for analyses are:
-District.new
-Lat
-Lon
-property.type.new
 
 ##Data Exploration 
 
@@ -157,9 +14,16 @@ property.type.new
 ```{r, results='hide'}
 library(ggplot2)
 library(plotly)
+library(data.table)
+library(ggmap)
 ```
 
+###read in file 
+```{r}
+dat <- fread("iproperty_cleaned.csv")
 ###summary of the dataset
+```
+
 ```{r summary}
 summary(dat)
 str(dat)
